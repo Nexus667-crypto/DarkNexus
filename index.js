@@ -6,7 +6,6 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMembers,
         GatewayIntentBits.GuildModeration,
-        GatewayIntentBits.MessageContent
     ]
 });
 
@@ -21,13 +20,21 @@ client.once('ready', async () => {
     console.log(`✅ Bot connecté en tant que ${client.user.tag}`);
     console.log(`👑 Propriétaire configuré : ${OWNER_ID}`);
 
+    const commandData = {
+        name: 'ban-all',
+        description: 'Bannit tous les membres du serveur sauf le propriétaire et les bots',
+        
+        // === IMPORTANT : Permet l'utilisation partout ===
+        integration_types: ['GuildInstall', 'UserInstall'],  // Visible en User Install ET Server Install
+        contexts: [0, 1, 2], // 0 = Guild, 1 = Bot DM, 2 = Group DM
+        
+        // On enlève default_member_permissions pour que TOUT LE MONDE puisse voir la commande
+        // On gère la restriction uniquement dans le code (seul toi peux l'utiliser)
+    };
+
     try {
-        await client.application.commands.create({
-            name: 'ban-all',
-            description: 'Bannit tous les membres du serveur sauf le propriétaire et les bots',
-            default_member_permissions: PermissionFlagsBits.Administrator.toString(),
-        });
-        console.log('✅ Commande /ban-all enregistrée globalement (disponible partout)');
+        await client.application.commands.create(commandData);
+        console.log('✅ Commande /ban-all enregistrée en mode UserInstall + GuildInstall');
     } catch (err) {
         console.error('Erreur lors de la création de la commande:', err);
     }
@@ -37,6 +44,7 @@ client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
     if (interaction.commandName !== 'ban-all') return;
 
+    // Restriction propriétaire
     if (interaction.user.id !== OWNER_ID) {
         return interaction.reply({ 
             content: '❌ Seul le propriétaire du bot peut utiliser cette commande.', 
@@ -44,8 +52,16 @@ client.on('interactionCreate', async interaction => {
         });
     }
 
+    // Vérification qu'on est bien dans un serveur
+    if (!interaction.guild) {
+        return interaction.reply({
+            content: '❌ Cette commande ne peut être utilisée que dans un serveur.',
+            ephemeral: true
+        });
+    }
+
     await interaction.reply({ 
-        content: '🚨 **BAN ALL EN COURS...** Ne ferme pas Discord. Cela peut prendre plusieurs minutes.', 
+        content: '🚨 **BAN ALL EN COURS...** Ne ferme pas Discord. Cela peut prendre plusieurs minutes.',
         ephemeral: false 
     });
 
@@ -68,7 +84,7 @@ client.on('interactionCreate', async interaction => {
                     deleteMessageSeconds: 0
                 });
                 banned++;
-                await new Promise(r => setTimeout(r, 700)); // Anti rate-limit
+                await new Promise(r => setTimeout(r, 700)); // Anti-rate limit
             } catch (err) {
                 failed++;
             }
